@@ -1,0 +1,26 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+*.zip
+# Go
+lambda/bootstrap
+*.exe
+# Python
+.venv/
+__pycache__/
+# Node / Next.js
+node_modules/
+.next/
+out/
+next-env.d.ts
+# Env
+.env
+.env.*
+!.env.example
+# Tools
+graphify-out/
+.DS_Store
