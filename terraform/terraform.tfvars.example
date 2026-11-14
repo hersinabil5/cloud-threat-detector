@@ -1,0 +1,3 @@
+# Copy to terraform.tfvars (git-ignored) and fill in.
+alert_email  = "you@example.com"
+database_url = "postgresql://user:password@ep-example.ca-central-1.aws.neon.tech/neondb?sslmode=require"
