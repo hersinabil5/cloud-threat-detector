@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-lambda-go/events"
@@ -30,8 +32,44 @@ type Event struct {
 		ARN  string `json:"arn"`
 		Type string `json:"type"`
 	} `json:"userIdentity"`
+	Params struct {
+		PolicyArn string `json:"policyArn"`
+	} `json:"requestParameters"`
 	Raw json.RawMessage `json:"-"`
 }
+
+// rule checks one event on its own; rules that need history run as SQL in store.
+func rule(e Event) (severity, reason string) {
+	switch {
+	case e.Identity.Type == "Root":
+		return "critical", "Root account used: " + e.Name
+	case e.Source == "cloudtrail.amazonaws.com" &&
+		(e.Name == "StopLogging" || e.Name == "DeleteTrail" || e.Name == "UpdateTrail" || e.Name == "PutEventSelectors"):
+		return "high", "CloudTrail logging changed: " + e.Name
+	case e.Source == "iam.amazonaws.com" && strings.HasPrefix(e.Name, "Attach") && strings.HasSuffix(e.Params.PolicyArn, "/AdministratorAccess"):
+		return "high", "AdministratorAccess granted: " + e.Name
+	case e.Source == "iam.amazonaws.com" && e.Name == "CreateAccessKey":
+		return "medium", "New access key created"
+	}
+	return "", ""
+}
+
+const insertAlert = `INSERT INTO alerts (created_at, severity, identity_arn, reason, event_id)
+	VALUES ($1, $2, NULLIF($3, ''), $4, $5) ON CONFLICT DO NOTHING`
+
+// shortcut: an older log file ingested after a newer one can raise a second alert for the same IP; fine at this volume.
+const newIPAlert = `INSERT INTO alerts (created_at, severity, identity_arn, reason, event_id)
+	SELECT $1::timestamptz, 'medium', $2::text, 'API call from a never-seen IP (' || $3::text || ')', $4::text
+	WHERE EXISTS (SELECT 1 FROM events WHERE identity_arn = $2 AND event_time < $1)
+	  AND NOT EXISTS (SELECT 1 FROM events WHERE identity_arn = $2 AND source_ip = $3 AND event_time < $1)
+	ON CONFLICT DO NOTHING`
+
+// Fires on exactly the 10th denial in a 10-minute window, so a burst raises one alert.
+const deniedBurstAlert = `INSERT INTO alerts (created_at, severity, identity_arn, reason, event_id)
+	SELECT $1::timestamptz, 'low', $2::text, '10 AccessDenied errors in 10 minutes', $3::text
+	WHERE (SELECT count(*) FROM events WHERE identity_arn = $2 AND error_code IN ('AccessDenied', 'Client.UnauthorizedOperation')
+	       AND event_time > $1::timestamptz - interval '10 minutes' AND event_time <= $1) = 10
+	ON CONFLICT DO NOTHING`
 
 // parse reads a gzipped CloudTrail log file.
 func parse(r io.Reader) ([]Event, error) {
@@ -54,7 +92,7 @@ func parse(r io.Reader) ([]Event, error) {
 	return evs, nil
 }
 
-// store writes all events in one transaction; re-running on the same events inserts nothing.
+// store writes events and their alerts in one transaction; re-running on the same events inserts nothing.
 func store(ctx context.Context, conn *pgx.Conn, evs []Event) error {
 	tx, err := conn.Begin(ctx)
 	if err != nil {
@@ -70,6 +108,15 @@ func store(ctx context.Context, conn *pgx.Conn, evs []Event) error {
 			b.Queue(`INSERT INTO identities (arn, type, first_seen, last_seen) VALUES ($1, $2, $3, $3)
 				ON CONFLICT (arn) DO UPDATE SET first_seen = LEAST(identities.first_seen, $3), last_seen = GREATEST(identities.last_seen, $3)`,
 				e.Identity.ARN, e.Identity.Type, e.Time)
+		}
+		if sev, reason := rule(e); sev != "" {
+			b.Queue(insertAlert, e.Time, sev, e.Identity.ARN, reason, e.ID)
+		}
+		if e.Identity.ARN != "" && net.ParseIP(e.IP) != nil {
+			b.Queue(newIPAlert, e.Time, e.Identity.ARN, e.IP, e.ID)
+		}
+		if e.Identity.ARN != "" && (e.ErrorCode == "AccessDenied" || e.ErrorCode == "Client.UnauthorizedOperation") {
+			b.Queue(deniedBurstAlert, e.Time, e.Identity.ARN, e.ID)
 		}
 	}
 	res := tx.SendBatch(ctx, b)
