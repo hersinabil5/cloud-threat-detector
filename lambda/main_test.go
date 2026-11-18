@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
+	"fmt"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -57,6 +60,86 @@ func TestStoreIsIdempotent(t *testing.T) {
 		conn.QueryRow(ctx, "SELECT count(*) FROM events WHERE event_id LIKE '%-1111-%' OR event_id LIKE '%-2222-%'").Scan(&n)
 		if n != 2 {
 			t.Fatalf("run %d: %d rows, want 2", run, n)
+		}
+	}
+}
+
+func ev(typ, src, name, policy string) Event {
+	var e Event
+	e.Identity.Type, e.Source, e.Name, e.Params.PolicyArn = typ, src, name, policy
+	return e
+}
+
+func TestRule(t *testing.T) {
+	cases := []struct {
+		e   Event
+		sev string
+	}{
+		{ev("Root", "signin.amazonaws.com", "ConsoleLogin", ""), "critical"},
+		{ev("IAMUser", "cloudtrail.amazonaws.com", "StopLogging", ""), "high"},
+		{ev("IAMUser", "cloudtrail.amazonaws.com", "DeleteTrail", ""), "high"},
+		{ev("IAMUser", "iam.amazonaws.com", "AttachUserPolicy", "arn:aws:iam::aws:policy/AdministratorAccess"), "high"},
+		{ev("IAMUser", "iam.amazonaws.com", "AttachRolePolicy", "arn:aws:iam::aws:policy/AdministratorAccess"), "high"},
+		{ev("IAMUser", "iam.amazonaws.com", "CreateAccessKey", ""), "medium"},
+		// must not fire
+		{ev("IAMUser", "iam.amazonaws.com", "AttachUserPolicy", "arn:aws:iam::aws:policy/ReadOnlyAccess"), ""},
+		{ev("IAMUser", "cloudtrail.amazonaws.com", "DescribeTrails", ""), ""},
+		{ev("IAMUser", "s3.amazonaws.com", "ListBuckets", ""), ""},
+	}
+	for _, c := range cases {
+		if sev, reason := rule(c.e); sev != c.sev {
+			t.Errorf("%s/%s: got %q (%s), want %q", c.e.Identity.Type, c.e.Name, sev, reason, c.sev)
+		}
+	}
+}
+
+// Needs TEST_DATABASE_URL like TestStoreIsIdempotent.
+func TestHistoryRules(t *testing.T) {
+	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" {
+		t.Skip("TEST_DATABASE_URL not set")
+	}
+	ctx := context.Background()
+	conn, err := pgx.Connect(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	const arn = "arn:aws:iam::123456789012:user/histtest"
+	conn.Exec(ctx, "DELETE FROM alerts WHERE identity_arn = $1", arn)
+	conn.Exec(ctx, "DELETE FROM events WHERE identity_arn = $1", arn)
+
+	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	mk := func(i int, ip, errCode string) Event {
+		var e Event
+		e.ID, e.Time, e.Name, e.Source, e.IP, e.ErrorCode = fmt.Sprintf("hist-%03d", i), base.Add(time.Duration(i)*time.Second), "ListBuckets", "s3.amazonaws.com", ip, errCode
+		e.Identity.ARN, e.Identity.Type, e.Raw = arn, "IAMUser", json.RawMessage(`{}`)
+		return e
+	}
+	var evs []Event
+	evs = append(evs, mk(0, "198.51.100.1", "")) // first ever event: baseline, no alert
+	evs = append(evs, mk(1, "198.51.100.1", "")) // same IP: no alert
+	evs = append(evs, mk(2, "203.0.113.50", "")) // new IP: alert
+	evs = append(evs, mk(3, "203.0.113.50", "")) // seen now: no alert
+	for i := 4; i < 16; i++ {                    // 12 denials: one burst alert
+		evs = append(evs, mk(i, "198.51.100.1", "AccessDenied"))
+	}
+	count := func(reasonLike string) (n int) {
+		conn.QueryRow(ctx, "SELECT count(*) FROM alerts WHERE identity_arn = $1 AND reason LIKE $2", arn, reasonLike).Scan(&n)
+		return
+	}
+	for run := 0; run < 2; run++ { // second run checks re-ingest adds no alerts
+		if err := store(ctx, conn, evs); err != nil {
+			t.Fatal(err)
+		}
+		if n := count("%never-seen IP (203.0.113.50)%"); n != 1 {
+			t.Errorf("run %d: new-IP alerts = %d, want 1", run, n)
+		}
+		if n := count("%never-seen IP (198.51.100.1)%"); n != 0 {
+			t.Errorf("run %d: baseline IP alerted %d times", run, n)
+		}
+		if n := count("%AccessDenied%"); n != 1 {
+			t.Errorf("run %d: burst alerts = %d, want 1", run, n)
 		}
 	}
 }

@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS alerts (
   reason       text NOT NULL,
   event_id     text REFERENCES events (event_id) ON DELETE SET NULL
 );
+-- Re-ingesting a log file must not duplicate alerts.
+CREATE UNIQUE INDEX IF NOT EXISTS alerts_event_reason_idx ON alerts (event_id, reason);
 
 -- Sample rows so the dashboard has something to show. Skipped if alerts already has data.
 INSERT INTO alerts (created_at, severity, identity_arn, reason)
