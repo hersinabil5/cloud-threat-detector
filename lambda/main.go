@@ -64,11 +64,13 @@ const newIPAlert = `INSERT INTO alerts (created_at, severity, identity_arn, reas
 	  AND NOT EXISTS (SELECT 1 FROM events WHERE identity_arn = $2 AND source_ip = $3 AND event_time < $1)
 	ON CONFLICT DO NOTHING`
 
-// Fires on exactly the 10th denial in a 10-minute window, so a burst raises one alert.
+// At least 10 denials in the 10 minutes up to this event, and no burst alert for this identity within 10 minutes either side.
 const deniedBurstAlert = `INSERT INTO alerts (created_at, severity, identity_arn, reason, event_id)
 	SELECT $1::timestamptz, 'low', $2::text, '10 AccessDenied errors in 10 minutes', $3::text
 	WHERE (SELECT count(*) FROM events WHERE identity_arn = $2 AND error_code IN ('AccessDenied', 'Client.UnauthorizedOperation')
-	       AND event_time > $1::timestamptz - interval '10 minutes' AND event_time <= $1) = 10
+	       AND event_time > $1::timestamptz - interval '10 minutes' AND event_time <= $1) >= 10
+	  AND NOT EXISTS (SELECT 1 FROM alerts WHERE identity_arn = $2 AND reason = '10 AccessDenied errors in 10 minutes'
+	       AND created_at BETWEEN $1::timestamptz - interval '10 minutes' AND $1::timestamptz + interval '10 minutes')
 	ON CONFLICT DO NOTHING`
 
 // parse reads a gzipped CloudTrail log file.
@@ -109,10 +111,14 @@ func store(ctx context.Context, conn *pgx.Conn, evs []Event) error {
 				ON CONFLICT (arn) DO UPDATE SET first_seen = LEAST(identities.first_seen, $3), last_seen = GREATEST(identities.last_seen, $3)`,
 				e.Identity.ARN, e.Identity.Type, e.Time)
 		}
+	}
+	// Rules run after every event is inserted: CloudTrail files aren't in time order.
+	for _, e := range evs {
 		if sev, reason := rule(e); sev != "" {
 			b.Queue(insertAlert, e.Time, sev, e.Identity.ARN, reason, e.ID)
 		}
-		if e.Identity.ARN != "" && net.ParseIP(e.IP) != nil {
+		// Only long-term logins: AWS runs service roles (like this Lambda's) from a new IP on almost every call.
+		if (e.Identity.Type == "IAMUser" || e.Identity.Type == "Root") && net.ParseIP(e.IP) != nil {
 			b.Queue(newIPAlert, e.Time, e.Identity.ARN, e.IP, e.ID)
 		}
 		if e.Identity.ARN != "" && (e.ErrorCode == "AccessDenied" || e.ErrorCode == "Client.UnauthorizedOperation") {

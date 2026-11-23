@@ -43,6 +43,6 @@ resource "aws_s3_bucket_policy" "logs" {
 resource "aws_cloudtrail" "main" {
   name                  = local.trail_name
   s3_bucket_name        = aws_s3_bucket.logs.id
-  is_multi_region_trail = false
+  is_multi_region_trail = true # IAM, root sign-in and other global events are only logged in us-east-1
   depends_on            = [aws_s3_bucket_policy.logs]
 }

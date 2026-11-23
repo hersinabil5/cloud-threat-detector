@@ -106,8 +106,10 @@ func TestHistoryRules(t *testing.T) {
 	}
 	defer conn.Close(ctx)
 	const arn = "arn:aws:iam::123456789012:user/histtest"
-	conn.Exec(ctx, "DELETE FROM alerts WHERE identity_arn = $1", arn)
-	conn.Exec(ctx, "DELETE FROM events WHERE identity_arn = $1", arn)
+	for _, a := range []string{arn, "arn:aws:sts::123456789012:assumed-role/svc/x"} {
+		conn.Exec(ctx, "DELETE FROM alerts WHERE identity_arn = $1", a)
+		conn.Exec(ctx, "DELETE FROM events WHERE identity_arn = $1", a)
+	}
 
 	base := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	mk := func(i int, ip, errCode string) Event {
@@ -124,9 +126,19 @@ func TestHistoryRules(t *testing.T) {
 	for i := 4; i < 16; i++ {                    // 12 denials: one burst alert
 		evs = append(evs, mk(i, "198.51.100.1", "AccessDenied"))
 	}
+	role := mk(99, "203.0.113.77", "") // service roles hop IPs: never a new-IP alert
+	role.Identity.ARN, role.Identity.Type = "arn:aws:sts::123456789012:assumed-role/svc/x", "AssumedRole"
+	evs = append(evs, mk(98, "198.51.100.1", ""), role)
+	role0 := role
+	role0.ID, role0.IP, role0.Time = "hist-097", "198.51.100.9", base
+	evs = append([]Event{role0}, evs...)
 	count := func(reasonLike string) (n int) {
 		conn.QueryRow(ctx, "SELECT count(*) FROM alerts WHERE identity_arn = $1 AND reason LIKE $2", arn, reasonLike).Scan(&n)
 		return
+	}
+	// CloudTrail files aren't in time order: ingest newest-first to prove the rules don't depend on order.
+	for i, j := 0, len(evs)-1; i < j; i, j = i+1, j-1 {
+		evs[i], evs[j] = evs[j], evs[i]
 	}
 	for run := 0; run < 2; run++ { // second run checks re-ingest adds no alerts
 		if err := store(ctx, conn, evs); err != nil {
@@ -137,6 +149,9 @@ func TestHistoryRules(t *testing.T) {
 		}
 		if n := count("%never-seen IP (198.51.100.1)%"); n != 0 {
 			t.Errorf("run %d: baseline IP alerted %d times", run, n)
+		}
+		if n := count("%203.0.113.77%"); n != 0 {
+			t.Errorf("run %d: service role got %d new-IP alerts", run, n)
 		}
 		if n := count("%AccessDenied%"); n != 1 {
 			t.Errorf("run %d: burst alerts = %d, want 1", run, n)
