@@ -24,3 +24,9 @@ next-env.d.ts
 # Tools
 graphify-out/
 .DS_Store
+
+# AI assistant notes and config: local only
+CLAUDE.md
+PROGRESS.md
+tasks/
+.claude/

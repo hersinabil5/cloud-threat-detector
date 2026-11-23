@@ -2,7 +2,7 @@
 
 Watches an AWS account for signs of an attack. It reads CloudTrail logs (the record of every action in the account), learns what normal looks like for each user, and raises an alert when something breaks the pattern: stolen credentials, someone granting themselves admin rights, logging being turned off. A web dashboard lists the alerts.
 
-> **Status:** skeleton. Ingestion and the dashboard work; detection rules and the ML scoring are still stubs. See [PROGRESS.md](PROGRESS.md).
+> **Status:** in progress. Ingestion and six detection rules are deployed; ML scoring is a stub and the dashboard runs locally only.
 
 ## Architecture
 
