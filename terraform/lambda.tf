@@ -75,6 +75,7 @@ resource "aws_s3_bucket_notification" "logs" {
     lambda_function_arn = aws_lambda_function.ingest.arn
     events              = ["s3:ObjectCreated:*"]
     filter_prefix       = "AWSLogs/${local.account_id}/CloudTrail/"
+    filter_suffix       = ".json.gz" # skip the empty folder marker CloudTrail creates
   }
 
   depends_on = [aws_lambda_permission.s3]
