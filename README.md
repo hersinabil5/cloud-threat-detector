@@ -1,8 +1,16 @@
 # Cloud Threat Detector
 
-Watches an AWS account for signs of an attack. It reads CloudTrail logs (the record of every action in the account), learns what normal looks like for each user, and raises an alert when something breaks the pattern: stolen credentials, someone granting themselves admin rights, logging being turned off. A web dashboard lists the alerts.
+A security tool I built that watches a real AWS account for signs of an attack. It reads every action recorded in CloudTrail, checks it against detection rules and a machine-learning model, and shows the alerts on a web dashboard with a plain-language explanation and a replay of what the user did.
 
-> **Status:** live. Ingestion, six detection rules and the dashboard (password-protected, on Vercel) run continuously; ML scoring runs by hand (`ml/score.py`).
+**Live demo: [What it detects and how each attack looks](https://cloud-threat-detector-l1cn.vercel.app/attacks)**
+
+## What it does
+
+- **Collects** every management action in the account (CloudTrail → S3 → a Go Lambda → Postgres), about 5–15 minutes after it happens.
+- **Detects** six attack patterns with rules: root account use, audit logging switched off, admin rights granted, new access keys, logins from never-seen IPs, and bursts of denied calls.
+- **Learns normal behaviour** with an isolation forest that scores each user's activity hour by hour and flags the strangest ones, catching attacks no single rule describes.
+- **Explains** each alert on a dashboard: what it means, what to do, the raw event, and a replay of everything that user did 30 minutes either side.
+- **Tested against real attacks**: a script plays out an account takeover (backdoor user, access key, permission probing, admin grant, logging turned off) and cleans up after itself.
 
 ## Results
 
@@ -19,7 +27,7 @@ Tested on a real AWS account with `scripts/simulate-attacks.sh` (a throwaway use
 
 The isolation forest scored 180 user-hours of real activity. The 6 it flagged were the 5 attack hours above plus day-one setup (a genuinely unusual burst of infrastructure changes), so it found every attack hour with one false alarm.
 
-## Architecture
+## How it works
 
 ```
 AWS account                                                     Neon (Postgres)
@@ -32,7 +40,7 @@ AWS account                                                     Neon (Postgres)
                                                                                                │ read
                                                                               ┌────────────────▼───────┐
                                                                               │ Next.js dashboard      │
-                                                                              │ (Vercel, server-side DB)│
+                                                                              │ (server-side DB)       │
                                                                               └────────────────────────┘
 ```
 
@@ -42,24 +50,21 @@ AWS account                                                     Neon (Postgres)
 | `lambda/`    | Go function that ingests log files |
 | `db/`        | Postgres schema + sample alerts    |
 | `ml/`        | Python isolation forest, per identity-hour |
-| `dashboard/` | Next.js alerts page                |
+| `dashboard/` | Next.js dashboard                  |
+
+## Tech stack
+
+- **Infrastructure:** Terraform, AWS CloudTrail, S3, Lambda (arm64), IAM with least-privilege roles
+- **Ingestion and rules:** Go (aws-lambda-go, AWS SDK v2, pgx)
+- **Machine learning:** Python, scikit-learn (isolation forest)
+- **Database:** Postgres on Neon
+- **Dashboard:** Next.js (App Router, server components), password-protected
 
 ## Cost
 
-Designed to be about free. One trail, management events only, no VPC, no NAT, no EC2.
+Designed to run for about free: one trail with management events only, no VPC, NAT gateway or EC2. CloudTrail, Lambda, Neon and the dashboard hosting all fit in free tiers; S3 log storage costs fractions of a cent because logs expire after 30 days. A budget alert emails if the account ever passes $5/month.
 
-| Item                                       | Cost                    |
-| ------------------------------------------ | ----------------------- |
-| CloudTrail, first trail, management events | $0                      |
-| S3 (logs expire after 30 days)             | cents                   |
-| Lambda (arm64) and its 7-day logs          | $0 inside the free tier |
-| AWS Budgets (one budget)                   | $0                      |
-| Neon free tier                             | $0                      |
-| Vercel Hobby                               | $0                      |
-
-A budget alert emails you if the account passes **$5/month**. Never added: data events, a second trail, CloudTrail Insights or Lake, CloudWatch Logs delivery.
-
-## Deploy from scratch
+## Run it yourself
 
 You need: Go, Terraform, and the AWS CLI installed (`brew install hashicorp/tap/terraform awscli`), plus `psql` and Node 20+.
 
@@ -86,17 +91,10 @@ terraform apply
 
 Check: do something in the AWS console (e.g. create and delete an S3 bucket), wait 5–15 minutes, then `psql "<connection string>" -c "select count(*) from events"` should show rows.
 
-### 4. Dashboard on Vercel
-
-1. Create a Vercel account (Hobby) and import this GitHub repo.
-2. Set **Root Directory** to `dashboard`.
-3. Add the environment variables `DATABASE_URL` (your Neon string) and `DASHBOARD_PASSWORD` (any long random string). Deploy.
-4. Open the URL; the browser asks for a login. Any username works with that password. Without `DASHBOARD_PASSWORD` every page returns 401.
-
 ### Run the dashboard locally
 
 ```sh
-cd dashboard && cp ../.env.example .env.local   # put your real URL in it
+cd dashboard && cp ../.env.example .env.local   # put your database URL and a dashboard password in it
 npm install && npm run dev
 ```
 
