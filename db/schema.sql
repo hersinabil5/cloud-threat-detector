@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS alerts (
   reason       text NOT NULL,
   event_id     text REFERENCES events (event_id) ON DELETE SET NULL
 );
+ALTER TABLE alerts ADD COLUMN IF NOT EXISTS score real;  -- isolation-forest score for ML alerts, NULL for rule alerts
 -- Re-ingesting a log file must not duplicate alerts.
 CREATE UNIQUE INDEX IF NOT EXISTS alerts_event_reason_idx ON alerts (event_id, reason);
 

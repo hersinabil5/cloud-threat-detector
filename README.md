@@ -2,7 +2,7 @@
 
 Watches an AWS account for signs of an attack. It reads CloudTrail logs (the record of every action in the account), learns what normal looks like for each user, and raises an alert when something breaks the pattern: stolen credentials, someone granting themselves admin rights, logging being turned off. A web dashboard lists the alerts.
 
-> **Status:** in progress. Ingestion and six detection rules are deployed; ML scoring is a stub and the dashboard runs locally only.
+> **Status:** in progress. Ingestion and six detection rules are deployed; ML scoring runs by hand (`ml/score.py`) and the dashboard runs locally only.
 
 ## Architecture
 
@@ -26,7 +26,7 @@ AWS account                                                     Neon (Postgres)
 | `terraform/` | All AWS infrastructure             |
 | `lambda/`    | Go function that ingests log files |
 | `db/`        | Postgres schema + sample alerts    |
-| `ml/`        | Python isolation forest (stub)     |
+| `ml/`        | Python isolation forest, per identity-hour |
 | `dashboard/` | Next.js alerts page                |
 
 ## Cost
@@ -93,5 +93,5 @@ No secrets live in the code. `terraform.tfvars` and `.env*` are git-ignored. The
 ```sh
 cd lambda && go vet ./... && go test ./...                              # parser test
 TEST_DATABASE_URL=postgres:///yourdb go test ./...                      # also checks re-ingest adds no duplicates
-cd ml && python -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python score.py
+cd ml && python -m venv .venv && .venv/bin/pip install -r requirements.txt && .venv/bin/python test_score.py && DATABASE_URL=... .venv/bin/python score.py
 ```
