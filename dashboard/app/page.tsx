@@ -21,7 +21,7 @@ export default async function Page({ searchParams }: { searchParams: Promise<{ s
           <h1>Cloud Threat Detector</h1>
           <div className="muted">Suspicious activity in your AWS account</div>
         </div>
-        <div className="muted">Last 7 days</div>
+        <div><Link href="/attacks">What we detect</Link> <span className="muted">· Last 7 days</span></div>
       </div>
 
       <div className="cards">

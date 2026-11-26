@@ -32,8 +32,8 @@ export default async function AlertPage({ params }: { params: Promise<{ id: stri
 
       {ex && (
         <div className={`explain ${a.severity}`}>
-          <p><b>What this means:</b> {ex[0]}</p>
-          <p><b>What to do:</b> {ex[1]}</p>
+          <p><b>What this means:</b> {ex.meaning}</p>
+          <p><b>What to do:</b> {ex.action} <Link href="/attacks">How this attack works →</Link></p>
         </div>
       )}
 

@@ -45,3 +45,11 @@ pre { background: var(--surface); border: 1px solid var(--border); border-radius
 summary { cursor: pointer; color: var(--accent); margin: 24px 0 8px; }
 
 @media (max-width: 640px) { .hide-sm { display: none; } }
+
+.rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.rule h3 { margin: 8px 0; font-size: 17px; }
+.rule p { margin: 0 0 10px; }
+.rule pre { margin: 0 0 10px; }
+.rule-head { display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+.show-sm { display: none; }
+@media (max-width: 640px) { .show-sm { display: block; } .rules { grid-template-columns: 1fr; } }
