@@ -2,7 +2,7 @@
 
 Watches an AWS account for signs of an attack. It reads CloudTrail logs (the record of every action in the account), learns what normal looks like for each user, and raises an alert when something breaks the pattern: stolen credentials, someone granting themselves admin rights, logging being turned off. A web dashboard lists the alerts.
 
-> **Status:** in progress. Ingestion and six detection rules are deployed; ML scoring runs by hand (`ml/score.py`) and the dashboard runs locally only.
+> **Status:** in progress. Ingestion and six detection rules are deployed; ML scoring runs by hand (`ml/score.py`) and the dashboard has an alert detail page with a replay of the user's activity, and sits behind a password.
 
 ## Architecture
 
@@ -75,7 +75,8 @@ Check: do something in the AWS console (e.g. create and delete an S3 bucket), wa
 
 1. Create a Vercel account (Hobby) and import this GitHub repo.
 2. Set **Root Directory** to `dashboard`.
-3. Add the environment variable `DATABASE_URL` (your Neon string). Deploy.
+3. Add the environment variables `DATABASE_URL` (your Neon string) and `DASHBOARD_PASSWORD` (any long random string). Deploy.
+4. Open the URL; the browser asks for a login. Any username works with that password. Without `DASHBOARD_PASSWORD` every page returns 401.
 
 ### Run the dashboard locally
 

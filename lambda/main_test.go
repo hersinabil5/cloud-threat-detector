@@ -75,7 +75,6 @@ func TestRule(t *testing.T) {
 		e   Event
 		sev string
 	}{
-		{ev("Root", "signin.amazonaws.com", "ConsoleLogin", ""), "critical"},
 		{ev("IAMUser", "cloudtrail.amazonaws.com", "StopLogging", ""), "high"},
 		{ev("IAMUser", "cloudtrail.amazonaws.com", "DeleteTrail", ""), "high"},
 		{ev("IAMUser", "iam.amazonaws.com", "AttachUserPolicy", "arn:aws:iam::aws:policy/AdministratorAccess"), "high"},
@@ -106,7 +105,8 @@ func TestHistoryRules(t *testing.T) {
 	}
 	defer conn.Close(ctx)
 	const arn = "arn:aws:iam::123456789012:user/histtest"
-	for _, a := range []string{arn, "arn:aws:sts::123456789012:assumed-role/svc/x"} {
+	const rootARN = "arn:aws:iam::123456789012:root"
+	for _, a := range []string{arn, "arn:aws:sts::123456789012:assumed-role/svc/x", rootARN} {
 		conn.Exec(ctx, "DELETE FROM alerts WHERE identity_arn = $1", a)
 		conn.Exec(ctx, "DELETE FROM events WHERE identity_arn = $1", a)
 	}
@@ -132,6 +132,12 @@ func TestHistoryRules(t *testing.T) {
 	role0 := role
 	role0.ID, role0.IP, role0.Time = "hist-097", "198.51.100.9", base
 	evs = append([]Event{role0}, evs...)
+	for i, mins := range []int{0, 20, 50, 130} { // one sign-in's calls: one alert; 130 min later: a second
+		r := mk(200+i, "198.51.100.1", "")
+		r.Time, r.Name = base.Add(time.Duration(mins)*time.Minute), "ConsoleLogin"
+		r.Identity.ARN, r.Identity.Type = rootARN, "Root"
+		evs = append(evs, r)
+	}
 	count := func(reasonLike string) (n int) {
 		conn.QueryRow(ctx, "SELECT count(*) FROM alerts WHERE identity_arn = $1 AND reason LIKE $2", arn, reasonLike).Scan(&n)
 		return
@@ -155,6 +161,11 @@ func TestHistoryRules(t *testing.T) {
 		}
 		if n := count("%AccessDenied%"); n != 1 {
 			t.Errorf("run %d: burst alerts = %d, want 1", run, n)
+		}
+		var roots int
+		conn.QueryRow(ctx, "SELECT count(*) FROM alerts WHERE identity_arn = $1 AND reason LIKE 'Root account used: %'", rootARN).Scan(&roots)
+		if roots != 2 {
+			t.Errorf("run %d: root alerts = %d, want 2", run, roots)
 		}
 	}
 }

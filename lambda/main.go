@@ -41,8 +41,6 @@ type Event struct {
 // rule checks one event on its own; rules that need history run as SQL in store.
 func rule(e Event) (severity, reason string) {
 	switch {
-	case e.Identity.Type == "Root":
-		return "critical", "Root account used: " + e.Name
 	case e.Source == "cloudtrail.amazonaws.com" &&
 		(e.Name == "StopLogging" || e.Name == "DeleteTrail" || e.Name == "UpdateTrail" || e.Name == "PutEventSelectors"):
 		return "high", "CloudTrail logging changed: " + e.Name
@@ -62,6 +60,13 @@ const newIPAlert = `INSERT INTO alerts (created_at, severity, identity_arn, reas
 	SELECT $1::timestamptz, 'medium', $2::text, 'API call from a never-seen IP (' || $3::text || ')', $4::text
 	WHERE EXISTS (SELECT 1 FROM events WHERE identity_arn = $2 AND event_time < $1)
 	  AND NOT EXISTS (SELECT 1 FROM events WHERE identity_arn = $2 AND source_ip = $3 AND event_time < $1)
+	ON CONFLICT DO NOTHING`
+
+// One root alert per hour either side: a single console sign-in makes dozens of root calls.
+const rootAlert = `INSERT INTO alerts (created_at, severity, identity_arn, reason, event_id)
+	SELECT $1::timestamptz, 'critical', $2::text, 'Root account used: ' || $3::text, $4::text
+	WHERE NOT EXISTS (SELECT 1 FROM alerts WHERE identity_arn = $2 AND reason LIKE 'Root account used: %'
+	       AND created_at BETWEEN $1::timestamptz - interval '1 hour' AND $1::timestamptz + interval '1 hour')
 	ON CONFLICT DO NOTHING`
 
 // At least 10 denials in the 10 minutes up to this event, and no burst alert for this identity within 10 minutes either side.
@@ -114,6 +119,9 @@ func store(ctx context.Context, conn *pgx.Conn, evs []Event) error {
 	}
 	// Rules run after every event is inserted: CloudTrail files aren't in time order.
 	for _, e := range evs {
+		if e.Identity.Type == "Root" {
+			b.Queue(rootAlert, e.Time, e.Identity.ARN, e.Name, e.ID)
+		}
 		if sev, reason := rule(e); sev != "" {
 			b.Queue(insertAlert, e.Time, sev, e.Identity.ARN, reason, e.ID)
 		}
