@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { pool } from "@/lib/db";
 import { Badge, RULES } from "@/lib/ui";
 
@@ -14,6 +13,7 @@ const CHAIN = [
   ["Whole hour", "Together, these hours look nothing like normal use.", "Unusual hour (machine learning)"],
 ] as const;
 
+// Plain <a>, not <Link>: Link prefetches the password-protected pages, which pops a login box on this public page.
 export default async function AttacksPage() {
   // Latest real alert for each detection, so every card can link to an example from this account.
   const { rows } = await pool.query(
@@ -23,7 +23,7 @@ export default async function AttacksPage() {
   const example = Object.fromEntries(rows.map((r) => [r.p, r.id]));
   return (
     <main>
-      <p><Link href="/">← All alerts</Link></p>
+      <p><a href="/">← All alerts</a></p>
       <h1>What we detect</h1>
       <p className="muted" style={{ maxWidth: 720 }}>
         Every action in your AWS account is written to CloudTrail. Seven detections read that log and raise an alert
@@ -62,7 +62,7 @@ export default async function AttacksPage() {
             <pre>{r.example}</pre>
             <p><b>What to do:</b> {r.action}</p>
             {example[r.prefix]
-              ? <Link href={`/alert/${example[r.prefix]}`}>See a real example from this account →</Link>
+              ? <a href={`/alert/${example[r.prefix]}`}>See a real example from this account →</a>
               : <span className="muted">No alert of this kind yet.</span>}
           </section>
         ))}
