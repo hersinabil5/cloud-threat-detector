@@ -2,7 +2,22 @@
 
 Watches an AWS account for signs of an attack. It reads CloudTrail logs (the record of every action in the account), learns what normal looks like for each user, and raises an alert when something breaks the pattern: stolen credentials, someone granting themselves admin rights, logging being turned off. A web dashboard lists the alerts.
 
-> **Status:** in progress. Ingestion and six detection rules are deployed; ML scoring runs by hand (`ml/score.py`) and the dashboard has an alert detail page with a replay of the user's activity, and sits behind a password.
+> **Status:** live. Ingestion, six detection rules and the dashboard (password-protected, on Vercel) run continuously; ML scoring runs by hand (`ml/score.py`).
+
+## Results
+
+Tested on a real AWS account with `scripts/simulate-attacks.sh` (a throwaway user that is deleted again afterwards) and a real root sign-in. Every attack produced its alert. Alerts appear 5–15 minutes after the action, which is how long CloudTrail takes to deliver its log files.
+
+| Attack | How it was simulated | Rule alert | Severity | ML flagged the hour? |
+|---|---|---|---|---|
+| Root account used | Sign in to the console as root | Root account used | critical | yes |
+| Logging turned off | `aws cloudtrail stop-logging` | CloudTrail logging changed: StopLogging | high | yes (admin's hour) |
+| Self-granted admin | Attach `AdministratorAccess` to the test user | AdministratorAccess granted | high | yes (admin's hour) |
+| Persistence via access key | `aws iam create-access-key` | New access key created | medium | yes (admin's hour) |
+| Permission probing | Test user calls services it has no rights to | 10 AccessDenied errors in 10 minutes | low | yes |
+| Login from a new place | Admin uses the account from home and phone | API call from a never-seen IP | medium | no: normal activity otherwise |
+
+The isolation forest scored 180 user-hours of real activity. The 6 it flagged were the 5 attack hours above plus day-one setup (a genuinely unusual burst of infrastructure changes), so it found every attack hour with one false alarm.
 
 ## Architecture
 
